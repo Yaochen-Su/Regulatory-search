@@ -16,13 +16,21 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # 2. 数据加载
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def load_data():
     files = [f for f in os.listdir("data") if f.lower().endswith(('.pdf', '.docx'))]
     all_data = []
-    for f in files:
+    
+    # 进度展示
+    progress_container = st.empty()
+    for i, f in enumerate(files):
+        with progress_container.container():
+            st.info(f"正在分析第 {i+1}/{len(files)} 份文档: {f} (扫描件可能耗时较长...)")
+        
         df_item = process_document_to_dataframe(os.path.join("data", f))
         if not df_item.empty: all_data.append(df_item)
+    
+    progress_container.empty()
     return pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
 
 df = load_data()
