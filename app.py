@@ -4,97 +4,108 @@ import os
 import re
 from processor import process_document_to_dataframe
 
-# 1. 页面配置与美化
-st.set_page_config(page_title="标准数字化阅览室", layout="wide")
+# --- 1. 初始化与样式 ---
+st.set_page_config(page_title="法规标准数字化工作站", layout="wide")
+DB_FILE = "processed_database.csv"
+
 st.markdown("""
     <style>
-    .toc-btn { text-align: left !important; border-bottom: 1px solid #eee !important; font-size: 0.85em !important; }
-    .content-box { padding: 20px; border-radius: 8px; border: 1px solid #e0e0e0; margin-bottom: 15px; background: #fff; }
-    .highlight { background-color: #fff9c4; border: 2px solid #ffd600; }
-    mark { background: #ffeb3b; font-weight: bold; }
+    .toc-btn { text-align: left !important; font-size: 0.85em !important; margin-bottom: 2px !important; }
+    .content-box { padding: 20px; border-radius: 10px; border: 1px solid #e2e8f0; margin-bottom: 15px; background: white; }
+    .highlight-card { border: 2px solid #fbbf24; background-color: #fffbeb; }
+    mark { background-color: #fef08a; font-weight: bold; border-radius: 2px; }
+    .param-label { background: #dcfce7; color: #166534; padding: 2px 8px; border-radius: 4px; font-weight: bold; }
     </style>
 """, unsafe_allow_html=True)
 
-# 2. 数据加载
-@st.cache_data(show_spinner=False)
-def load_data():
-    files = [f for f in os.listdir("data") if f.lower().endswith(('.pdf', '.docx'))]
-    all_data = []
+# --- 2. 增量加载逻辑 ---
+def load_and_sync_data():
+    db_df = pd.read_csv(DB_FILE) if os.path.exists(DB_FILE) else pd.DataFrame()
+    processed = set(db_df['来源文件'].unique()) if not db_df.empty else set()
     
-    # 进度展示
-    progress_container = st.empty()
-    for i, f in enumerate(files):
-        with progress_container.container():
-            st.info(f"正在分析第 {i+1}/{len(files)} 份文档: {f} (扫描件可能耗时较长...)")
+    # 扫描 data 文件夹
+    if not os.path.exists("data"): os.makedirs("data")
+    current_files = [f for f in os.listdir("data") if f.lower().endswith(('.pdf', '.docx'))]
+    new_files = [f for f in current_files if f not in processed]
+
+    if new_files:
+        new_entries = []
+        status = st.empty()
+        pbar = st.progress(0)
+        for i, f in enumerate(new_files):
+            status.info(f"正在增量解析 ({i+1}/{len(new_files)}): {f} ...")
+            df_item = process_document_to_dataframe(os.path.join("data", f))
+            if not df_item.empty: new_entries.append(df_item)
+            pbar.progress((i + 1) / len(new_files))
         
-        df_item = process_document_to_dataframe(os.path.join("data", f))
-        if not df_item.empty: all_data.append(df_item)
-    
-    progress_container.empty()
-    return pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
+        if new_entries:
+            combined = pd.concat([db_df, pd.concat(new_entries)], ignore_index=True)
+            combined.to_csv(DB_FILE, index=False)
+            st.cache_data.clear()
+            status.success("🎉 数据库已同步更新！")
+            return combined
+    return db_df
 
-df = load_data()
+df = load_and_sync_data()
 
-# 3. 侧边栏：选择文件与目录树
+# --- 3. 侧边栏：标准选择与目录树 ---
 with st.sidebar:
-    st.title("🗂️ 标准库目录")
+    st.title("📚 标准目录")
     if not df.empty:
         std_list = list(df['标准号'].unique())
-        selected_std = st.selectbox("当前查阅标准：", std_list)
+        selected_std = st.selectbox("选择要查阅的标准：", std_list)
         
         st.divider()
         st.write("📍 **快速跳转章节**")
-        # 提取当前标准的目录结构 [cite: 1, 21]
-        current_toc = df[df['标准号'] == selected_std]
-        for idx, row in current_toc.iterrows():
-            if st.button(f" {row['条款号']}", key=f"t_{idx}", use_container_width=True):
+        # 提取当前选定标准的目录
+        toc_view = df[df['标准号'] == selected_std]
+        for idx, row in toc_view.iterrows():
+            if st.button(f" {row['条款号']}", key=f"btn_{idx}", use_container_width=True):
                 st.session_state.jump_target = row['条款号']
-    else:
-        st.warning("data/ 文件夹为空")
+    
+    st.markdown("---")
+    if st.checkbox("管理员重置权限"):
+        if st.button("🔥 清空存档并全库重扫", type="primary"):
+            if os.path.exists(DB_FILE): os.remove(DB_FILE)
+            st.cache_data.clear()
+            st.rerun()
 
-# 4. 主界面：检索区域
-st.title("📘 数字化查阅与检索平台")
-search_input = st.text_input("🔍 全文模糊搜索或输入具体条款号（如：5.6.1）", placeholder="输入内容点击回车...")
+# --- 4. 主界面：检索与展示逻辑 ---
+st.title("⚖️ 法规标准数字化查阅平台")
+search_input = st.text_input("🔍 全文搜索或输入条款号（例如：跌落高度、5.6.1）", "")
 
-# 5. 核心逻辑：全文 vs 搜索视图切换
 if not df.empty:
     if search_input:
-        # --- 视图 A：搜索模式 (仅显示搜索内容) ---
+        # 搜索视图：仅显示匹配结果
         st.subheader(f"🎯 搜索结果：'{search_input}'")
-        # 支持模糊搜索内容或精确匹配条款号 [cite: 1, 8, 21]
-        results = df[
-            (df['内容'].str.contains(search_input, case=False, na=False)) | 
-            (df['条款号'] == search_input)
-        ]
+        # 条款号精确匹配或正文模糊匹配
+        results = df[(df['内容'].str.contains(search_input, case=False)) | (df['条款号'] == search_input)]
         
         if not results.empty:
             for _, row in results.iterrows():
-                # 高亮匹配词 
-                highlighted_content = re.sub(f"({search_input})", r"<mark>\1</mark>", row['内容'], flags=re.IGNORECASE)
+                # 高亮关键词
+                text = re.sub(f"({search_input})", r"<mark>\1</mark>", row['内容'], flags=re.IGNORECASE)
                 st.markdown(f"""
                     <div class="content-box">
-                        <small>{row['标准号']} - 条款 {row['条款号']}</small>
-                        <div style="margin-top:10px;">{highlighted_content}</div>
+                        <small>{row['标准号']}</small><br>
+                        <b>[{row['条款号']}]</b> {text}<br>
+                        <div style="margin-top:10px;"><span class="param-label">参数：{row['技术参数']}</span></div>
                     </div>
                 """, unsafe_allow_html=True)
         else:
-            st.error("未找到相关条目")
+            st.warning("未找到匹配内容。")
     else:
-        # --- 视图 B：全文查阅模式 ---
-        st.subheader(f"📖 全文查阅：{selected_std}")
-        current_view = df[df['标准号'] == selected_std]
-        
-        for _, row in current_view.iterrows():
-            # 跳转锚点判断
-            is_target = "jump_target" in st.session_state and st.session_state.jump_target == row['条款号']
-            card_class = "content-box highlight" if is_target else "content-box"
-            
+        # 全文视图：显示选定标准的完整内容 [cite: 1, 19, 21]
+        st.subheader(f"📖 全文浏览：{selected_std}")
+        for _, row in toc_view.iterrows():
+            is_target = st.session_state.get('jump_target') == row['条款号']
+            card_style = "content-box highlight-card" if is_target else "content-box"
             st.markdown(f"""
-                <div class="{card_class}">
-                    <div style="font-weight:bold; color:#1565C0;">[{row['条款号']}]</div>
-                    <div style="margin-top:8px;">{row['内容']}</div>
-                    <div style="margin-top:10px;"><small>📊 技术参数：{row['技术参数']}</small></div>
+                <div class="{card_style}">
+                    <div style="font-weight:bold; color:#1e40af;">[{row['条款号']}]</div>
+                    <div style="margin-top:10px;">{row['内容']}</div>
+                    <div style="margin-top:10px;"><span class="tag">参数：{row['技术参数']}</span></div>
                 </div>
             """, unsafe_allow_html=True)
 else:
-    st.info("请在 GitHub 的 data/ 文件夹上传标准文件以开始。")
+    st.info("请在 data/ 文件夹中放入标准文件（PDF 或 Word）。")
