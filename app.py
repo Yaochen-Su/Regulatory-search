@@ -138,6 +138,17 @@ with st.sidebar:
                 st.session_state.jump_target = row['条款号']
     
     st.divider()
+    st.write("💾 **数据备份**")
+    if os.path.exists(DB_FILE):
+        with open(DB_FILE, "rb") as file:
+            st.download_button(
+                label="📥 下载解析后的数据库 (CSV)",
+                data=file,
+                file_name="processed_database.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
     with st.expander("🛠️ 管理员工具"):
         if st.checkbox("授权重置权限"):
             if st.button("🔥 清空并全库重扫", type="primary"):
