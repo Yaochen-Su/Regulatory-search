@@ -1,69 +1,76 @@
 import streamlit as st
 import pandas as pd
 import os
-import pytesseract
 from processor import process_document_to_dataframe
 
-# --- 1. 强制环境检测 ---
-st.set_page_config(page_title="调试模式")
-st.title("🛠️ 系统环境诊断")
+st.set_page_config(page_title="标准数字化系统", layout="wide")
 
-# 检查 Tesseract 是否可用
-tess_path = r'C:\Program Files\Tesseract-OCR\tesseract.exe' # 请确保这是你的实际安装路径
-pytesseract.pytesseract.tesseract_cmd = tess_path
+# --- 环境检查区 ---
+with st.sidebar:
+    st.header("⚙️ 环境诊断")
+    tess_exists = os.path.exists(r'C:\Program Files\Tesseract-OCR\tesseract.exe')
+    if tess_exists:
+        st.success("Tesseract 引擎已就绪")
+    else:
+        st.error("未找到 Tesseract！请检查路径")
 
-st.subheader("第一步：环境检查")
-if os.path.exists(tess_path):
-    st.success(f"✅ 找到 Tesseract 引擎: {tess_path}")
-    try:
-        ver = pytesseract.get_tesseract_version()
-        st.write(f"引擎版本: {ver}")
-    except Exception as e:
-        st.error(f"❌ 引擎无法运行: {e}")
-else:
-    st.error(f"❌ 未找到 Tesseract 引擎！请检查路径是否为: {tess_path}")
-
-# --- 2. 顺序解析逻辑 (不再使用多线程/多进程) ---
 DB_FILE = "processed_database.csv"
 
-def simple_sync():
+# --- 核心同步逻辑 (单线程最稳版) ---
+def sync_data():
     if not os.path.exists("data"):
         os.makedirs("data")
-        st.warning("data 文件夹为空")
         return pd.DataFrame()
 
     db_df = pd.read_csv(DB_FILE) if os.path.exists(DB_FILE) else pd.DataFrame()
     processed = set(db_df['来源文件'].unique()) if not db_df.empty else set()
-    files = [f for f in os.listdir("data") if f.lower().endswith(('.pdf', '.docx'))]
-    new_files = [f for f in files if f not in processed]
+    
+    current_files = [f for f in os.listdir("data") if f.lower().endswith(('.pdf', '.docx'))]
+    new_files = [f for f in current_files if f not in processed]
 
     if new_files:
-        st.subheader("第二步：逐步解析文件")
+        progress_text = st.empty()
+        pbar = st.progress(0)
         new_data = []
-        for f in new_files:
-            st.write(f"正在处理: {f} ...")
-            try:
-                # 顺序处理，一个一个来
-                df_item = process_document_to_dataframe(os.path.join("data", f))
-                if not df_item.empty:
-                    df_item['来源文件'] = f
-                    new_data.append(df_item)
-                    st.write(f"✅ {f} 解析成功")
-            except Exception as e:
-                st.error(f"❌ {f} 解析崩溃! 错误详情: {e}")
-                # 即使一个错，也继续下一个
-                continue
+        
+        for i, f in enumerate(new_files):
+            progress_text.text(f"正在处理 ({i+1}/{len(new_files)}): {f}")
+            df_item = process_document_to_dataframe(os.path.join("data", f))
+            if not df_item.empty:
+                new_data.append(df_item)
+            pbar.progress((i + 1) / len(new_files))
         
         if new_data:
-            combined = pd.concat([db_df] + new_data, ignore_index=True)
-            combined.to_csv(DB_FILE, index=False)
-            st.success("所有文件处理完毕！")
-            return combined
+            db_df = pd.concat([db_df] + new_data, ignore_index=True)
+            # 检查 CSV 是否被占用
+            try:
+                db_df.to_csv(DB_FILE, index=False)
+                st.success("数据库更新成功！")
+            except Exception as e:
+                st.error(f"无法保存数据库，请关闭已打开的 Excel 文件！错误: {e}")
+        progress_text.empty()
+        pbar.empty()
+    
     return db_df
 
-# 运行同步
-df = simple_sync()
+# --- 界面展示 ---
+st.title("⚖️ 数字化规程查阅平台")
+
+try:
+    df = sync_data()
+except Exception as e:
+    st.exception(e) # 这会将详细的错误栈显示在网页上
+    st.stop()
 
 if not df.empty:
-    st.subheader("第三步：数据显示")
-    st.dataframe(df.head(20))
+    search_query = st.text_input("🔍 输入关键词或条款号搜索")
+    
+    if search_query:
+        display_df = df[df['内容'].str.contains(search_query, case=False, na=False) | (df['条款号'] == search_query)]
+        st.subheader(f"找到 {len(display_df)} 条结果")
+        st.dataframe(display_df, use_container_width=True)
+    else:
+        st.info("👈 请在左侧选择标准，或在上方搜索。目前库内已有数据：")
+        st.write(df.groupby('标准号').size().reset_index(name='条款数量'))
+else:
+    st.info("请将文件放入 data 文件夹。")
