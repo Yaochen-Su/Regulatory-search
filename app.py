@@ -5,163 +5,150 @@ import re
 from processor import process_document_to_dataframe
 
 # --- 1. 页面配置与高级 CSS 美化 ---
-st.set_page_config(page_title="法规标准智慧工作站", page_icon="⚖️", layout="wide")
+st.set_page_config(page_title="法规标准数字化工作站", page_icon="⚖️", layout="wide")
 
 st.markdown("""
     <style>
     .stApp { background-color: #f4f7f9; }
     .header-banner {
-        background: linear-gradient(90deg, #1e3a8a 0%, #3b82f6 100%);
-        padding: 20px; border-radius: 12px; color: white; margin-bottom: 25px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-    .metric-container {
-        background: white; padding: 15px; border-radius: 10px; border: 1px solid #e5e7eb;
-        text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }
-    .clause-card {
-        background: white; padding: 25px; border-radius: 12px; border-left: 6px solid #3b82f6;
-        margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        background: linear-gradient(90deg, #0f172a 0%, #1e40af 100%);
+        padding: 25px; border-radius: 12px; color: white; margin-bottom: 25px;
     }
     .full-text-container {
-        background: white; padding: 40px; border-radius: 12px; line-height: 1.8; color: #334155;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05); white-space: pre-wrap;
+        background: white; padding: 40px; border-radius: 12px; line-height: 2; 
+        color: #1e293b; box-shadow: 0 4px 6px rgba(0,0,0,0.05);
     }
-    .std-badge { background: #dbeafe; color: #1e40af; padding: 4px 12px; border-radius: 50px; font-size: 0.75rem; font-weight: 700; }
-    .param-tag { background: #ecfdf5; color: #065f46; padding: 4px 10px; border-radius: 6px; font-family: monospace; font-weight: bold; }
-    mark { background: #fde047; font-weight: bold; padding: 0 2px; }
+    .clause-card {
+        background: white; padding: 25px; border-radius: 12px; border-left: 5px solid #3b82f6;
+        margin-bottom: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+    }
+    .level-1 { font-weight: bold; font-size: 1.2rem; color: #1e3a8a; margin-top: 20px; border-bottom: 2px solid #e2e8f0; padding-bottom: 5px; }
+    .level-2 { font-weight: 600; font-size: 1.05rem; color: #334155; margin-left: 15px; margin-top: 10px; }
+    .level-3 { font-size: 0.95rem; color: #475569; margin-left: 30px; }
+    .std-badge { background: #eff6ff; color: #1e40af; padding: 3px 10px; border-radius: 4px; font-size: 0.8rem; font-weight: bold; }
+    mark { background: #fde047; font-weight: bold; border-radius: 2px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 数据库同步逻辑 ---
+# --- 2. 数据处理与层级判定 ---
 DB_FILE = "processed_database.csv"
+
+def get_level(no):
+    """根据编号点数判定层级"""
+    if not no or not str(no)[0].isdigit(): return 1
+    return str(no).count('.') + 1
 
 def sync_database():
     if not os.path.exists("data"): os.makedirs("data")
     current_files = [f for f in os.listdir("data") if f.lower().endswith(('.pdf', '.docx'))]
-    if os.path.exists(DB_FILE):
-        try:
-            db_df = pd.read_csv(DB_FILE)
-            db_df = db_df[db_df['来源文件'].isin(current_files)]
-        except: db_df = pd.DataFrame()
-    else: db_df = pd.DataFrame()
-
+    db_df = pd.read_csv(DB_FILE) if os.path.exists(DB_FILE) else pd.DataFrame()
+    if not db_df.empty:
+        db_df = db_df[db_df['来源文件'].isin(current_files)]
+    
     processed = set(db_df['来源文件'].unique()) if not db_df.empty else set()
     new_files = [f for f in current_files if f not in processed]
 
     if new_files:
         new_entries = []
-        with st.status("🚀 正在数字化处理新标准...", expanded=True):
+        with st.status("🚀 正在构建层级索引...", expanded=True):
             for f in new_files:
                 item_df = process_document_to_dataframe(os.path.join("data", f))
                 if not item_df.empty:
                     item_df['来源文件'] = f
+                    # 增加层级列
+                    item_df['层级'] = item_df['编号'].apply(get_level)
                     new_entries.append(item_df)
             if new_entries:
                 db_df = pd.concat([db_df] + new_entries, ignore_index=True)
                 db_df.to_csv(DB_FILE, index=False)
-                st.cache_data.clear()
     return db_df
 
 df = sync_database()
 
-# --- 3. 侧边栏：布局重整 ---
+# --- 3. 侧边栏：功能置顶与层级索引 ---
 with st.sidebar:
-    # 修复 Logo 显示 (使用更稳定的图标源)
-    st.markdown(f'<div style="text-align: center;"><img src="https://img.icons8.com/fluency/96/law.png" width="80"></div>', unsafe_allow_html=True)
-    st.title("数字化控制台")
+    st.markdown(f'<div style="text-align: center;"><img src="https://img.icons8.com/fluency/96/law.png" width="70"></div>', unsafe_allow_html=True)
+    st.title("数字化工作站")
     
-    # 【需求：下载数据库放在最上面】
-    st.divider()
+    # 下载置顶
     if os.path.exists(DB_FILE):
         with open(DB_FILE, "rb") as file:
-            st.download_button("📥 下载解析库 (CSV)", data=file, file_name="standard_db.csv", use_container_width=True)
+            st.download_button("📥 下载结构化数据库 (CSV)", data=file, file_name="standard_structure.csv", use_container_width=True)
     st.divider()
 
     if not df.empty:
         std_list = sorted(list(df['标准号'].unique()))
-        # 标准切换时重置跳转目标
-        if 'last_std' not in st.session_state: st.session_state.last_std = std_list[0]
-        selected_std = st.selectbox("📂 选择查阅标准", std_list)
-        if selected_std != st.session_state.last_std:
-            st.session_state.jump_target = None
-            st.session_state.last_std = selected_std
+        selected_std = st.selectbox("📂 选择标准", std_list)
+        
+        st.markdown("### 📍 章节层级索引")
+        toc_view = df[df['标准号'] == selected_std].sort_values(by='编号')
+        
+        # 树状缩进显示索引
+        for _, row in toc_view.iterrows():
+            indent = "　" * (int(row['层级']) - 1)
+            icon = "● " if row['层级'] == 1 else "○ "
+            if st.button(f"{indent}{icon}{row['编号']}", key=f"side_{row['编号']}", use_container_width=True):
+                st.session_state.jump_target = row['编号']
 
-        st.markdown("### 📍 章节快速索引")
-        toc_df = df[df['标准号'] == selected_std]
-        # 章节点击逻辑
-        for idx, row in toc_df.iterrows():
-            if st.button(f"▫️ 条款 {row['条款号']}", key=f"btn_{idx}", use_container_width=True):
-                st.session_state.jump_target = row['条款号']
-                # 点击条款时清空搜索框 (通过 experimental_rerun 实现比较复杂，这里采用逻辑覆盖)
-    
     st.divider()
-    with st.expander("🛠️ 管理员工具"):
-        if st.checkbox("重置数据库权限"):
-            if st.button("🔥 彻底清除并重扫", type="primary"):
-                if os.path.exists(DB_FILE): os.remove(DB_FILE)
-                st.cache_data.clear()
-                st.rerun()
+    with st.expander("🛠️ 系统维护"):
+        if st.button("🔥 彻底重置数据库", type="primary"):
+            if os.path.exists(DB_FILE): os.remove(DB_FILE)
+            st.rerun()
 
-# --- 4. 主界面：智慧检索与内容分流 ---
+# --- 4. 主界面：总分总展示逻辑 ---
 st.markdown("""
     <div class="header-banner">
-        <h1 style='margin:0; font-size: 1.8rem;'>法规标准智慧化数字化查阅平台</h1>
-        <p style='margin:5px 0 0 0; opacity: 0.8;'>全文通读模式 | 数字化章节索引 | 智慧检索</p>
+        <h1 style='margin:0; font-size: 1.8rem;'>法规标准数字化查阅平台</h1>
+        <p style='margin:5px 0 0 0; opacity: 0.8;'>层级化结构展示 | 自动化参数提取</p>
     </div>
     """, unsafe_allow_html=True)
 
 if not df.empty:
-    # 统计 Dashboard
-    m1, m2, m3, m4 = st.columns(4)
-    with m1: st.markdown(f'<div class="metric-container"><small>标准总数</small><br><b>{len(df["标准号"].unique())}</b></div>', unsafe_allow_html=True)
-    with m2: st.markdown(f'<div class="metric-container"><small>条款总计</small><br><b>{len(df)}</b></div>', unsafe_allow_html=True)
-    with m3: st.markdown(f'<div class="metric-container"><small>参数识别率</small><br><b>{len(df[df["技术参数"]!="见详情内容"])/len(df):.1%}</b></div>', unsafe_allow_html=True)
-    with m4: st.markdown(f'<div class="metric-container"><small>状态</small><br><b style="color:#10b981;">已就绪</b></div>', unsafe_allow_html=True)
-
-    # 搜索区
-    st.write("")
+    # 智慧检索
     sc1, sc2 = st.columns([4, 1])
     with sc1:
-        search_query = st.text_input("🔍 输入搜索关键词...", placeholder="搜索后将单独显示相应条款内容...", label_visibility="collapsed")
+        query = st.text_input("🔍 检索编号或关键词...", placeholder="模糊搜索内容，或输入精准编号", label_visibility="collapsed")
     with sc2:
-        search_mode = st.toggle("精准模式", value=False)
+        precise = st.toggle("精准匹配", value=False)
 
-    # --- 核心内容展示逻辑 ---
-    if search_query:
-        # A. 搜索模式：显示搜索结果卡片
-        st.subheader("🎯 搜索结果")
-        if search_mode:
-            results = df[(df['条款号'].str.fullmatch(search_query, na=False)) | (df['内容'].str.contains(rf'\b{re.escape(search_query)}\b', case=False, na=False))]
+    target_id = st.session_state.get('jump_target')
+    current_std_df = df[df['标准号'] == selected_std].sort_values(by='编号')
+
+    if query:
+        # A. 搜索结果模式
+        st.subheader("🎯 匹配结果")
+        if precise:
+            results = current_std_df[current_std_df['编号'] == query]
         else:
-            results = df[(df['内容'].str.contains(search_query, case=False, na=False)) | (df['条款号'].str.contains(search_query, na=False))]
+            results = current_std_df[current_std_df['内容'].str.contains(query, case=False, na=False) | current_std_df['编号'].str.contains(query, na=False)]
         
-        if not results.empty:
-            for _, row in results.iterrows():
-                highlight = re.sub(f"({re.escape(search_query)})", r"<mark>\1</mark>", str(row['内容']), flags=re.IGNORECASE)
-                st.markdown(f'<div class="clause-card"><span class="std-badge">{row["标准号"]}</span><div style="font-weight:bold; margin: 10px 0; color:#1e3a8a;">条款 {row["条款号"]}</div><div style="color:#374151; line-height:1.7;">{highlight}</div><div style="margin-top:15px;"><span class="param-tag">📊 核心参数: {row["技术参数"]}</span></div></div>', unsafe_allow_html=True)
-        else: st.warning("未找到匹配内容。")
+        for _, row in results.iterrows():
+            text = re.sub(f"({re.escape(query)})", r"<mark>\1</mark>", str(row['内容']), flags=re.IGNORECASE)
+            st.markdown(f'<div class="clause-card"><div class="std-badge">编号 {row["编号"]}</div><div style="margin-top:10px;">{text}</div><div style="margin-top:10px;"><small>📊 参数: {row["技术参数"]}</small></div></div>', unsafe_allow_html=True)
 
-    elif st.session_state.get('jump_target'):
-        # B. 条款选中模式：单独显示选中的条款内容
-        target = st.session_state.get('jump_target')
-        st.subheader(f"📍 条款详情: {target}")
-        item = toc_df[toc_df['条款号'] == target]
-        if not item.empty:
-            row = item.iloc[0]
-            st.markdown(f'<div class="clause-card" style="border-left: 6px solid #f59e0b; background-color: #fffbeb;"><span class="std-badge">{row["标准号"]}</span><div style="font-weight:bold; margin: 10px 0; color:#1e3a8a;">条款 {row["条款号"]}</div><div style="color:#374151; line-height:1.8; font-size:1.1rem;">{row["内容"]}</div><div style="margin-top:20px;"><span class="param-tag">📊 参数摘要: {row["技术参数"]}</span></div></div>', unsafe_allow_html=True)
-            if st.button("⬅️ 返回显示全文"):
-                st.session_state.jump_target = None
-                st.rerun()
-    
+    elif target_id:
+        # B. 选中章节及其子项模式 (总分总 - 分)
+        st.subheader(f"📍 章节查阅: {target_id}")
+        # 查找该编号及其所有子编号 (如点击 1，显示 1, 1.1, 1.1.1)
+        sub_df = current_std_df[current_std_df['编号'].str.startswith(str(target_id))]
+        for _, row in sub_df.iterrows():
+            level_cls = f"level-{min(int(row['层级']), 3)}"
+            st.markdown(f'<div class="{level_cls}">[{row["编号"]}]</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="clause-card" style="margin-left:{min(int(row["层级"]-1)*20, 40)}px;">{row["内容"]}<br><small style="color:#64748b;">参数：{row["技术参数"]}</small></div>', unsafe_allow_html=True)
+        if st.button("⬅️ 返回全文阅读"):
+            st.session_state.jump_target = None
+            st.rerun()
+
     else:
-        # C. 初始/全文模式：显示标准全文内容
-        st.subheader(f"📖 标准全文阅读: {selected_std}")
-        # 拼接该标准下所有条款内容形成“全文”
-        full_text_content = ""
-        for _, row in toc_df.iterrows():
-            full_text_content += f"### 条款 {row['条款号']}\n{row['内容']}\n\n"
-        
-        st.markdown(f'<div class="full-text-container">{full_text_content}</div>', unsafe_allow_html=True)
-
+        # C. 全文模式 (总分总 - 总)
+        st.subheader(f"📖 {selected_std} 全文浏览")
+        with st.container():
+            full_html = ""
+            for _, row in current_std_df.iterrows():
+                level_cls = f"level-{min(int(row['层级']), 3)}"
+                full_html += f'<div class="{level_cls}">[{row["编号"]}]</div>'
+                full_html += f'<div style="margin: 10px 0 20px {min(int(row["层级"]-1)*20, 40)}px; color:#334155; line-height:1.8;">{row["内容"]}</div>'
+            st.markdown(f'<div class="full-text-container">{full_html}</div>', unsafe_allow_html=True)
 else:
-    st.info("👋 库为空。请在 data/ 文件夹中放入文件。")
+    st.info("请在 data/ 文件夹中放入文件。")
