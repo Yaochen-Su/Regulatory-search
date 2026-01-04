@@ -8,7 +8,7 @@ from PIL import Image
 import io
 
 def extract_text_with_ocr(pdf_path):
-    """OCR识别扫描件"""
+    """仅针对纯扫描版 PDF 执行 OCR 识别"""
     doc = fitz.open(pdf_path)
     full_text = ""
     for page in doc:
@@ -29,32 +29,34 @@ def process_document_to_dataframe(file_path):
         elif ext == '.pdf':
             doc = fitz.open(file_path)
             fast_text = "\n".join([page.get_text() for page in doc])
+            # 文字层检测判定
             full_text = extract_text_with_ocr(file_path) if len(fast_text.strip()) < 100 else fast_text
         else: return pd.DataFrame()
     except: return pd.DataFrame()
 
-    # 标准号识别 (GB/T 4857.5)
+    # 标准号提取
     std_match = re.search(r'([A-Z/]{2,}\s?\d+\.?\d*-\d{2,4})', full_text[:1500].replace('\n', ' '))
     std_no = std_match.group(1).strip() if std_match else os.path.splitext(filename)[0]
 
-    # 修改后的核心正则：匹配层级编号 (1, 1.1, 1.1.1 等)
+    # 层级编号识别 (1, 1.1, 1.1.1)
     clause_pattern = r'\n(\d+(?:\.\d+)*)\s+(.*?)(?=\n\d+(?:\.\d+)*\s+|$)'
     clauses = re.findall(clause_pattern, full_text, re.DOTALL)
 
     data = []
     if not clauses:
-        paragraphs = [p.strip() for p in full_text.split('\n') if len(p.strip()) > 30]
-        for i, p in enumerate(paragraphs):
-            data.append({"标准号": std_no, "编号": f"{i+1}", "内容": p.strip(), "技术参数": "全文", "层级": 1})
+        # 兜底：按行切分为段落
+        for i, p in enumerate(full_text.split('\n')):
+            if len(p.strip()) > 30:
+                data.append({"标准号": std_no, "编号": f"段落-{i+1}", "内容": p.strip(), "技术参数": "全文", "层级": 1})
     else:
         for cid, content in clauses:
             clean_content = re.sub(r'\s+', ' ', content).strip()
-            # 技术参数自动提取 (±2%, 10kg 等)
+            # 自动提取技术指标 (±2%, 10kg 等)
             params = re.findall(r'±?\d+(?:\.\d+)?(?:%|°|mm|kg|mm²|MPa)', clean_content)
             data.append({
                 "标准号": std_no, "编号": cid, "内容": clean_content,
-                "技术参数": ", ".join(set(params)) if params else "见详情",
-                "层级": cid.count('.') + 1 # 自动计算层级
+                "技术参数": ", ".join(set(params)) if params else "见详情内容",
+                "层级": cid.count('.') + 1 # 自动标记深度
             })
 
     return pd.DataFrame(data)
