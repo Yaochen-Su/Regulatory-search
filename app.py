@@ -2,10 +2,11 @@ import streamlit as st
 import pandas as pd
 import os
 import re
+import time
 from processor import process_document_to_dataframe
 
-# --- 1. 页面配置与 UI 设计 ---
-st.set_page_config(page_title="法规标准数字化查阅平台", page_icon="⚖️", layout="wide")
+# --- 1. 页面配置与 CSS 美化 ---
+st.set_page_config(page_title="法规标准智慧工作站", page_icon="⚖️", layout="wide")
 
 st.markdown("""
     <style>
@@ -28,46 +29,70 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 数据库同步逻辑 (关键点：多文件处理) ---
+# --- 2. 增强型同步逻辑：支持内容更新检测 ---
 DB_FILE = "processed_database.csv"
 
 def sync_database():
     if not os.path.exists("data"): os.makedirs("data")
-    current_files = [f for f in os.listdir("data") if f.lower().endswith(('.pdf', '.docx'))]
     
-    # 侧边栏显示实时文件数
-    st.sidebar.caption(f"📁 文件夹内共有 {len(current_files)} 个文件")
-    
+    # 获取当前文件夹内所有物理文件及其修改时间
+    current_files = {}
+    for f in os.listdir("data"):
+        if f.lower().endswith(('.pdf', '.docx')):
+            mtime = os.path.getmtime(os.path.join("data", f))
+            current_files[f] = mtime
+
+    # 加载数据库
     if os.path.exists(DB_FILE):
-        db_df = pd.read_csv(DB_FILE)
-        # 清理已不存在的文件记录
-        db_df = db_df[db_df['来源文件'].isin(current_files)]
+        try:
+            db_df = pd.read_csv(DB_FILE)
+            # 清理已物理删除的文件
+            db_df = db_df[db_df['来源文件'].isin(current_files.keys())]
+        except:
+            db_df = pd.DataFrame()
     else:
         db_df = pd.DataFrame()
-    
-    processed = set(db_df['来源文件'].unique()) if not db_df.empty else set()
-    new_files = [f for f in current_files if f not in processed]
 
-    if new_files:
+    # 判定需要解析的文件：1. 新文件 2. 修改时间发生变动的文件
+    new_or_updated_files = []
+    for f, mtime in current_files.items():
+        if db_df.empty:
+            new_or_updated_files.append(f)
+        else:
+            # 查找该文件在库中的记录
+            file_records = db_df[db_df['来源文件'] == f]
+            if file_records.empty:
+                new_or_updated_files.append(f)
+            else:
+                # 检查时间戳是否匹配（取第一条记录的时间戳对比）
+                recorded_time = file_records.iloc[0].get('最后修改时间', 0)
+                if abs(float(recorded_time) - float(mtime)) > 1.0: # 允许 1 秒以内的误差
+                    new_or_updated_files.append(f)
+                    # 先删除旧的变动记录，防止重复
+                    db_df = db_df[db_df['来源文件'] != f]
+
+    if new_or_updated_files:
         new_entries = []
-        with st.status("🚀 正在构建法规数据库...", expanded=True):
-            for f in new_files:
-                st.write(f"🔍 正在解析新文件: {f}")
+        with st.status(f"🚀 正在检测并解析 {len(new_or_updated_files)} 个变动文件...", expanded=True):
+            for f in new_or_updated_files:
+                st.write(f"处理中: {f}")
                 item_df = process_document_to_dataframe(os.path.join("data", f))
                 if not item_df.empty:
                     item_df['来源文件'] = f
+                    item_df['最后修改时间'] = current_files[f] # 存入当前时间戳
                     new_entries.append(item_df)
+            
             if new_entries:
-                # 合并旧数据与新数据
                 db_df = pd.concat([db_df] + new_entries, ignore_index=True)
                 db_df.to_csv(DB_FILE, index=False)
                 st.cache_data.clear()
-        st.rerun() # 解析完成后自动刷新界面
+        st.rerun()
+    
     return db_df
 
 df = sync_database()
 
-# --- 3. 侧边栏及下载 ---
+# --- 3. 侧边栏布局 ---
 with st.sidebar:
     st.markdown('<div style="text-align: center;"><img src="https://img.icons8.com/fluency/96/law.png" width="80"></div>', unsafe_allow_html=True)
     st.title("法规查阅中心")
@@ -85,7 +110,6 @@ with st.sidebar:
         st.markdown("### 📍 条文索引")
         toc_view = df[df['标准号'] == selected_std]
         
-        # 章节树状索引
         last_chapter = ""
         for idx, row in toc_view.iterrows():
             if row['章'] != last_chapter:
@@ -103,14 +127,14 @@ with st.sidebar:
 st.markdown(f"""
     <div class="header-banner">
         <h1 style='margin:0; color:#1e3a8a;'>{selected_std if not df.empty else "法规库加载中"}</h1>
-        <p style='color:#64748b; margin-top:5px;'>数字化条文查阅工作站</p>
+        <p style='color:#64748b; margin-top:5px;'>数字化条文查阅工作站 (支持内容更新自动同步)</p>
     </div>
     """, unsafe_allow_html=True)
 
 if not df.empty:
     sc1, sc2 = st.columns([4, 1])
     with sc1:
-        query = st.text_input("🔍 搜索关键词或条文编号（如：第五条）", placeholder="输入关键词回车...", label_visibility="collapsed")
+        query = st.text_input("🔍 搜索关键词或条文编号", placeholder="输入关键词后回车...", label_visibility="collapsed")
     with sc2:
         precise = st.toggle("精准模式", value=False)
 
@@ -147,4 +171,4 @@ if not df.empty:
             full_html += f"<p><b>{row['编号']}</b> {row['全文']}</p>"
         st.markdown(f'<div class="full-text-area">{full_html}</div>', unsafe_allow_html=True)
 else:
-    st.info("👋 请将 PDF 或 Word 放入 data 文件夹开始使用。")
+    st.info("👋 请将文件放入 data 文件夹开始使用。")
