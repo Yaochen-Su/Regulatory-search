@@ -8,7 +8,7 @@ from PIL import Image
 import io
 
 def extract_text_with_ocr(pdf_path):
-    """针对扫描版 PDF 执行 OCR 识别"""
+    """仅针对纯扫描版 PDF 执行 OCR 识别"""
     doc = fitz.open(pdf_path)
     full_text = ""
     for page in doc:
@@ -25,30 +25,37 @@ def process_document_to_dataframe(file_path):
     full_text = ""
 
     try:
-        if ext == '.pdf':
+        # 1. Word 文档处理：永远不需要 OCR，直接提取
+        if ext == '.docx':
+            doc_obj = docx.Document(file_path)
+            full_text = "\n".join([para.text for para in doc_obj.paragraphs])
+        
+        # 2. PDF 文档处理
+        elif ext == '.pdf':
             doc = fitz.open(file_path)
-            # 尝试直接提取文本
+            # 尝试直接提取文字层
             fast_text = "\n".join([page.get_text() for page in doc])
-            # 如果文字密度极低，则触发 OCR [cite: 1]
+            
+            # 判断逻辑：如果文字层字符极少，则判定为不可搜索的扫描件
             if len(fast_text.strip()) < 100:
+                # 触发耗时的 OCR
                 full_text = extract_text_with_ocr(file_path)
             else:
+                # 正常 PDF 直接使用文字层
                 full_text = fast_text
-        elif ext == '.docx':
-            doc = docx.Document(file_path)
-            full_text = "\n".join([para.text for para in doc.paragraphs])
         else:
             return pd.DataFrame()
+            
     except Exception as e:
         print(f"解析 {filename} 失败: {e}")
         return pd.DataFrame()
 
-    # 识别标准号 (如 GB/T 4857.5) [cite: 3]
+    # 识别标准号 (如 GB/T 4857.5)
     std_pattern = r'([A-Z/]{2,}\s?\d+\.?\d*-\d{2,4})'
     std_match = re.search(std_pattern, full_text[:1500].replace('\n', ' '))
     std_no = std_match.group(1).strip() if std_match else os.path.splitext(filename)[0]
 
-    # 捕捉条款编号 (如 4.1, 5.6.1) [cite: 1, 8, 19]
+    # 捕捉条款编号 (如 4.1, 5.6.1)
     clause_pattern = r'\n(\d+(?:\.\d+)*)\s+(.*?)(?=\n\d+(?:\.\d+)*\s+|$)'
     clauses = re.findall(clause_pattern, full_text, re.DOTALL)
 
@@ -59,7 +66,7 @@ def process_document_to_dataframe(file_path):
             if len(p.strip()) > 20:
                 structured_data.append({
                     "标准号": std_no, "条款号": f"P{i+1}", 
-                    "内容": p.strip(), "技术参数": "查看全文", "来源文件": filename
+                    "内容": p.strip(), "技术参数": "查看全文内容", "来源文件": filename
                 })
     else:
         for cid, content in clauses:
