@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import re
 import time
+import altair as alt
 import streamlit.components.v1 as components
 from processor import process_document_to_dataframe
 
@@ -27,7 +28,7 @@ st.markdown("""
     }
     .chapter-tag { background: #eff6ff; color: #1e40af; padding: 4px 12px; border-radius: 4px; font-weight: bold; margin-bottom: 10px; display: inline-block; }
     mark { background: #fde047; font-weight: bold; padding: 0 2px; }
-    .report-card { background: #f0fdf4; border: 1px solid #bbf7d0; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+    .report-card { background: #f0fdf4; border: 1px solid #bbf7d0; padding: 15px; border-radius: 8px; margin-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -35,7 +36,6 @@ DB_FILE = "processed_database.csv"
 
 # --- 2. 桌面通知脚本 ---
 def notify_desktop(title, message):
-    """通过浏览器发送桌面通知"""
     js_code = f"""
     <script>
     if (Notification.permission === "granted") {{
@@ -51,7 +51,7 @@ def notify_desktop(title, message):
     """
     components.html(js_code, height=0)
 
-# --- 3. 增强型同步逻辑：增加报告与通知 ---
+# --- 3. 增强型同步逻辑：增加类型分布统计 ---
 def sync_database(ocr_enabled):
     if not os.path.exists("data"): os.makedirs("data")
     
@@ -70,11 +70,13 @@ def sync_database(ocr_enabled):
                 int(db_df[db_df['来源文件'] == f].iloc[0].get('最后修改时间', 0)) != mtime]
 
     if to_parse:
-        # 清除即将重扫的文件旧记录
         db_df = db_df[~db_df['来源文件'].isin(to_parse)]
-        
         new_entries = []
         total_files = len(to_parse)
+        # 统计类型分布
+        pdf_count = sum(1 for f in to_parse if f.lower().endswith('.pdf'))
+        docx_count = sum(1 for f in to_parse if f.lower().endswith('.docx'))
+        
         start_time = time.time()
         success_count = 0
         
@@ -97,47 +99,59 @@ def sync_database(ocr_enabled):
                 db_df.to_csv(DB_FILE, index=False)
                 st.cache_data.clear()
         
-        # 任务完成：记录报告并发送通知
         total_duration = time.time() - start_time
+        # 存入详细报告数据
         st.session_state.last_report = {
             "total": total_files,
             "success": success_count,
-            "time": f"{total_duration:.1f}秒",
-            "avg": f"{total_duration/total_files:.2f}秒" if total_files > 0 else "0秒"
+            "time": f"{total_duration:.1f}s",
+            "avg": f"{total_duration/total_files:.2f}s" if total_files > 0 else "0s",
+            "pdf": pdf_count,
+            "docx": docx_count
         }
-        notify_desktop("解析任务已完成", f"成功数字化 {success_count} 份规章文件，总耗时 {int(total_duration)} 秒。")
+        notify_desktop("解析任务已完成", f"成功数字化 {success_count} 份文件。")
         st.rerun()
     return db_df
 
-# --- 4. 侧边栏与报告展示 ---
+# --- 4. 侧边栏：布局与图表展示 ---
 with st.sidebar:
     st.markdown('<div style="text-align: center;"><img src="https://img.icons8.com/fluency/96/law.png" width="80"></div>', unsafe_allow_html=True)
     st.title("数字化控制台")
     
     st.divider()
-    ocr_mode = st.toggle("🔍 强制 OCR 识别模式", value=False)
-    st.divider()
-
     if os.path.exists(DB_FILE):
         with open(DB_FILE, "rb") as file:
             st.download_button("📥 导出数字化数据库", data=file, file_name="law_db.csv", use_container_width=True)
     st.divider()
 
+    ocr_mode = st.toggle("🔍 强制 OCR 识别模式", value=False)
     df = sync_database(ocr_mode)
 
-    # 显示解析报告统计
+    # 📊 解析报告统计与图表
     if 'last_report' in st.session_state:
         with st.expander("📊 上次解析报告", expanded=True):
             r = st.session_state.last_report
             st.markdown(f"""
             <div class='report-card'>
-            <b>处理总数:</b> {r['total']}<br>
+            <b>处理总数:</b> {r['total']} (PDF: {r['pdf']}, Word: {r['docx']})<br>
             <b>成功导入:</b> {r['success']}<br>
             <b>总计耗时:</b> {r['time']}<br>
-            <b>平均耗时:</b> {r['avg']}
             </div>
             """, unsafe_allow_html=True)
-            if st.button("清除报告记录"):
+            
+            # 绘制分布图
+            chart_data = pd.DataFrame({
+                '类型': ['PDF', 'Word'],
+                '数量': [r['pdf'], r['docx']]
+            })
+            chart = alt.Chart(chart_data).mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
+                x=alt.X('类型:N', axis=alt.Axis(labelAngle=0)),
+                y='数量:Q',
+                color=alt.Color('类型:N', scale=alt.Scale(range=['#2563eb', '#10b981']), legend=None)
+            ).properties(height=120)
+            st.altair_chart(chart, use_container_width=True)
+            
+            if st.button("清除报告记录", use_container_width=True):
                 del st.session_state.last_report
                 st.rerun()
 
@@ -154,11 +168,16 @@ with st.sidebar:
             if st.button(f"▫️ {row['编号']}", key=f"btn_{selected_std}_{idx}", use_container_width=True):
                 st.session_state.jump_target = row['编号']
 
+    st.divider()
+    if st.button("🔥 重置系统存档"):
+        if os.path.exists(DB_FILE): os.remove(DB_FILE)
+        st.rerun()
+
 # --- 5. 主界面渲染 ---
 st.markdown(f"""
     <div class="header-banner">
         <h1 style='margin:0; color:#1e3a8a;'>{selected_std if not df.empty else "法规库加载中"}</h1>
-        <p style='color:#64748b; margin-top:5px;'>数字化工作站 | 已启用桌面通知功能</p>
+        <p style='color:#64748b; margin-top:5px;'>数字化工作站 | 支持内容自动更新</p>
     </div>
     """, unsafe_allow_html=True)
 
