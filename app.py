@@ -4,7 +4,7 @@ import os
 import re
 from processor import process_document_to_dataframe
 
-# --- 1. 页面配置与高级 CSS ---
+# --- 1. 页面配置与 CSS 增强 ---
 st.set_page_config(page_title="法规标准数字化查阅平台", page_icon="⚖️", layout="wide")
 
 st.markdown("""
@@ -18,6 +18,8 @@ st.markdown("""
         background: white; padding: 35px; border-radius: 8px; line-height: 2.2;
         color: #1f2937; font-family: "SimSun", serif; font-size: 1.1rem;
         box-shadow: 0 4px 6px rgba(0,0,0,0.05); border: 1px solid #e5e7eb;
+        /* 【核心修改】：强制保留文本中的换行与空格格式 */
+        white-space: pre-wrap; 
     }
     .clause-block { margin-bottom: 25px; padding-bottom: 10px; }
     .clause-no { color: #1e3a8a; font-weight: bold; margin-bottom: 8px; font-size: 1.15rem; }
@@ -33,7 +35,7 @@ st.markdown("""
 
 DB_FILE = "processed_database.csv"
 
-# --- 2. 数据库同步逻辑 ---
+# --- 2. 数据库同步 ---
 def sync_database():
     if not os.path.exists("data"): os.makedirs("data")
     all_files = [f for f in os.listdir("data") if f.lower().endswith(('.pdf', '.docx'))]
@@ -51,7 +53,7 @@ def sync_database():
 
     if to_parse:
         new_entries = []
-        with st.status(f"🚀 正在数字化解析新规章..."):
+        with st.status(f"🚀 正在处理新规章..."):
             for f in to_parse:
                 item_df = process_document_to_dataframe(os.path.join("data", f))
                 if not item_df.empty:
@@ -65,7 +67,7 @@ def sync_database():
 
 df = sync_database()
 
-# --- 3. 侧边栏：文件选择逻辑优化 ---
+# --- 3. 侧边栏 ---
 with st.sidebar:
     st.markdown('<div style="text-align: center;"><img src="https://img.icons8.com/fluency/96/law.png" width="60"></div>', unsafe_allow_html=True)
     st.title("数字化控制台")
@@ -77,20 +79,20 @@ with st.sidebar:
     
     st.divider()
     if not df.empty:
-        # 【关键改动】：剥离文件格式后缀
-        raw_file_list = sorted(list(df['文件名'].unique()))
-        # 创建映射：{不带后缀的名字: 带后缀的原始文件名}
-        display_map = {os.path.splitext(f)[0]: f for f in raw_file_list}
+        # 【核心修改】：剥离文件后缀显示
+        all_raw_files = sorted(list(df['文件名'].unique()))
+        # 建立“无后缀名称 -> 原始文件名”的映射
+        file_map = {os.path.splitext(f)[0]: f for f in all_raw_files}
         
-        selected_display_name = st.selectbox("📂 当前查阅规章", list(display_map.keys()))
-        selected_real_file = display_map[selected_display_name]
+        selected_clean_name = st.selectbox("📂 当前查阅规章", list(file_map.keys()))
+        selected_file = file_map[selected_clean_name]
         
-        current_df = df[df['文件名'] == selected_real_file]
+        current_df = df[df['文件名'] == selected_file]
         
         st.info(f"📍 版本: {current_df['版本'].iloc[0] or '正式版'}")
         st.success(f"📅 实施日期: {current_df['实施日期'].iloc[0] or '待核实'}")
 
-# --- 4. 主界面渲染 ---
+# --- 4. 主界面 ---
 st.markdown('<div class="header-banner"><h1>法规标准数字化查阅平台</h1></div>', unsafe_allow_html=True)
 
 if not df.empty:
@@ -108,14 +110,14 @@ if not df.empty:
         st.subheader(f"🎯 搜索结果: {query}")
         res = current_df[current_df['全文'].str.contains(query, case=False, na=False) | current_df['编号'].str.contains(query, na=False)]
         for _, row in res.iterrows():
+            # 高亮保持段落换行
             text = re.sub(f"({re.escape(query)})", r"<mark>\1</mark>", str(row['全文']), flags=re.IGNORECASE)
-            st.markdown(f'<div class="clause-block"><div class="clause-no">{row["编号"]}</div><div>{text}</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="clause-block" style="white-space: pre-wrap;"><div class="clause-no">{row["编号"]}</div><div>{text}</div></div>', unsafe_allow_html=True)
     else:
-        # 【关键改动】：主标题也不显示后缀
-        st.subheader(f"📖 {selected_display_name}")
+        # 【核心修改】：主标题不显示后缀
+        st.subheader(f"📖 {selected_clean_name}")
         st.markdown(f'<div style="margin-bottom:20px;"><span class="tag-blue">发布日期: {current_df["发布日期"].iloc[0] or "待核实"}</span><span class="tag-green">实施日期: {current_df["实施日期"].iloc[0] or "待核实"}</span></div>', unsafe_allow_html=True)
 
-        # 构建正文 HTML
         content_html = ""
         last_chapter = ""
         for _, row in current_df.iterrows():
@@ -123,11 +125,9 @@ if not df.empty:
                 content_html += f'<h3 style="color:#1e40af; border-bottom:2px solid #e5e7eb; padding-bottom:5px; margin-top:30px;">{row["章"]}</h3>'
                 last_chapter = row['章']
             
-            # 过滤 nan 标签
             keywords = [k.strip() for k in str(row['关键词']).split(',') if k.strip() and k.lower() != 'nan']
             keyword_html = "".join([f'<span class="keyword-pill">{k}</span>' for k in keywords])
             
-            # 紧凑拼接，防止误判为代码块
             content_html += f'<div class="clause-block">'
             if row["编号"]: 
                 content_html += f'<div class="clause-no">{row["编号"]}</div>'
