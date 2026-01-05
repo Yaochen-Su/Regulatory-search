@@ -51,36 +51,51 @@ def notify_desktop(title, message):
     """
     components.html(js_code, height=0)
 
-# --- 3. 增强型同步逻辑：增加类型分布统计 ---
+# --- 3. 增强型同步逻辑 (解决 KeyError) ---
 def sync_database(ocr_enabled):
     if not os.path.exists("data"): os.makedirs("data")
     
+    # 获取物理文件元数据
     current_files_meta = {f: int(os.path.getmtime(os.path.join("data", f))) 
                           for f in os.listdir("data") if f.lower().endswith(('.pdf', '.docx'))}
 
+    # 加载数据库并检查列完整性
     if os.path.exists(DB_FILE):
         try:
             db_df = pd.read_csv(DB_FILE)
-            db_df = db_df[db_df['来源文件'].isin(current_files_meta.keys())]
-        except: db_df = pd.DataFrame()
-    else: db_df = pd.DataFrame()
+            # 核心修复：如果缺少关键列，则强制清空并重新解析，防止 KeyError
+            required_cols = ['来源文件', '最后修改时间', '编号', '全文']
+            if not all(col in db_df.columns for col in required_cols):
+                db_df = pd.DataFrame()
+            else:
+                db_df = db_df[db_df['来源文件'].isin(current_files_meta.keys())]
+        except: 
+            db_df = pd.DataFrame()
+    else:
+        db_df = pd.DataFrame()
 
-    to_parse = [f for f, mtime in current_files_meta.items() if db_df.empty or 
-                db_df[db_df['来源文件'] == f].empty or 
-                int(db_df[db_df['来源文件'] == f].iloc[0].get('最后修改时间', 0)) != mtime]
+    # 判定待处理文件
+    to_parse = []
+    for f, mtime in current_files_meta.items():
+        if db_df.empty:
+            to_parse.append(f)
+        else:
+            exist = db_df[db_df['来源文件'] == f]
+            # 安全获取时间戳，避免 KeyError
+            if exist.empty or int(exist.iloc[0].get('最后修改时间', 0)) != mtime:
+                to_parse.append(f)
+                db_df = db_df[db_df['来源文件'] != f]
 
     if to_parse:
-        db_df = db_df[~db_df['来源文件'].isin(to_parse)]
         new_entries = []
         total_files = len(to_parse)
-        # 统计类型分布
         pdf_count = sum(1 for f in to_parse if f.lower().endswith('.pdf'))
         docx_count = sum(1 for f in to_parse if f.lower().endswith('.docx'))
         
         start_time = time.time()
         success_count = 0
         
-        with st.status(f"🚀 正在同步 {total_files} 个文件...", expanded=True) as status:
+        with st.status(f"🚀 正在数字化处理 {total_files} 个文件...", expanded=True) as status:
             for i, f in enumerate(to_parse):
                 elapsed = time.time() - start_time
                 time_str = f"{int(elapsed / i * (total_files - i))}秒" if i > 0 else "计算中..."
@@ -100,20 +115,15 @@ def sync_database(ocr_enabled):
                 st.cache_data.clear()
         
         total_duration = time.time() - start_time
-        # 存入详细报告数据
         st.session_state.last_report = {
-            "total": total_files,
-            "success": success_count,
-            "time": f"{total_duration:.1f}s",
-            "avg": f"{total_duration/total_files:.2f}s" if total_files > 0 else "0s",
-            "pdf": pdf_count,
-            "docx": docx_count
+            "total": total_files, "success": success_count,
+            "time": f"{total_duration:.1f}s", "pdf": pdf_count, "docx": docx_count
         }
-        notify_desktop("解析任务已完成", f"成功数字化 {success_count} 份文件。")
+        notify_desktop("解析完成", f"成功处理 {success_count} 份文件。")
         st.rerun()
     return db_df
 
-# --- 4. 侧边栏：布局与图表展示 ---
+# --- 4. 侧边栏渲染 ---
 with st.sidebar:
     st.markdown('<div style="text-align: center;"><img src="https://img.icons8.com/fluency/96/law.png" width="80"></div>', unsafe_allow_html=True)
     st.title("数字化控制台")
@@ -127,22 +137,22 @@ with st.sidebar:
     ocr_mode = st.toggle("🔍 强制 OCR 识别模式", value=False)
     df = sync_database(ocr_mode)
 
-    # 📊 解析报告统计与图表
+    # 📊 解析报告图表显示 (增加安全防护)
     if 'last_report' in st.session_state:
         with st.expander("📊 上次解析报告", expanded=True):
             r = st.session_state.last_report
             st.markdown(f"""
             <div class='report-card'>
-            <b>处理总数:</b> {r['total']} (PDF: {r['pdf']}, Word: {r['docx']})<br>
-            <b>成功导入:</b> {r['success']}<br>
-            <b>总计耗时:</b> {r['time']}<br>
+            <b>处理总数:</b> {r.get('total', 0)} (PDF: {r.get('pdf', 0)}, Word: {r.get('docx', 0)})<br>
+            <b>成功导入:</b> {r.get('success', 0)}<br>
+            <b>总计耗时:</b> {r.get('time', '0s')}<br>
             </div>
             """, unsafe_allow_html=True)
             
-            # 绘制分布图
+            # 只有当数据存在时才绘制图表，防止绘图引起的 KeyError
             chart_data = pd.DataFrame({
                 '类型': ['PDF', 'Word'],
-                '数量': [r['pdf'], r['docx']]
+                '数量': [r.get('pdf', 0), r.get('docx', 0)]
             })
             chart = alt.Chart(chart_data).mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
                 x=alt.X('类型:N', axis=alt.Axis(labelAngle=0)),
@@ -165,6 +175,7 @@ with st.sidebar:
             if row['章'] != last_chapter:
                 st.caption(f"📁 {row['章']}")
                 last_chapter = row['章']
+            # 使用 标准号+索引 确保 Key 唯一
             if st.button(f"▫️ {row['编号']}", key=f"btn_{selected_std}_{idx}", use_container_width=True):
                 st.session_state.jump_target = row['编号']
 
@@ -173,11 +184,11 @@ with st.sidebar:
         if os.path.exists(DB_FILE): os.remove(DB_FILE)
         st.rerun()
 
-# --- 5. 主界面渲染 ---
+# --- 5. 主界面渲染 (保持原有逻辑) ---
 st.markdown(f"""
     <div class="header-banner">
         <h1 style='margin:0; color:#1e3a8a;'>{selected_std if not df.empty else "法规库加载中"}</h1>
-        <p style='color:#64748b; margin-top:5px;'>数字化工作站 | 支持内容自动更新</p>
+        <p style='color:#64748b; margin-top:5px;'>数字化工作站 | 自动更新检测已启用</p>
     </div>
     """, unsafe_allow_html=True)
 
