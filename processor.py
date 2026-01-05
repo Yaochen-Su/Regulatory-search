@@ -39,11 +39,9 @@ def process_document_to_dataframe(file_path, ocr_enabled=False):
 
     if not full_text.strip(): return pd.DataFrame()
 
-    # 提取规章标题
     title_search = re.search(r'([^\n]{2,50}(?:条例|办法|标准|规定|文件))', full_text[:2000])
     std_no = title_search.group(1).strip() if title_search else os.path.splitext(filename)[0]
 
-    # 条文识别 (第X条)
     articles = re.split(r'\n(第[一二三四五六七八九十百]+条)', full_text)
     data = []
     current_chapter = "总则"
