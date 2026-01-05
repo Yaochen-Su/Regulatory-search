@@ -12,9 +12,11 @@ def process_document_to_dataframe(file_path):
     try:
         if ext == '.docx':
             doc_obj = docx.Document(file_path)
+            # 保留段落之间的换行符
             full_text = "\n".join([p.text for p in doc_obj.paragraphs])
         elif ext == '.pdf':
             doc = fitz.open(file_path)
+            # 提取原始布局文字
             full_text = "\n".join([page.get_text() for page in doc])
             doc.close()
     except: return pd.DataFrame()
@@ -22,27 +24,28 @@ def process_document_to_dataframe(file_path):
     full_text = full_text.strip()
     if not full_text: return pd.DataFrame()
 
+    # 提取日期与版本信息
     dates = re.findall(r'(\d{4}年\d{1,2}月\d{1,2}日)', full_text[:2000])
     pub_date = dates[0] if len(dates) > 0 else ""
     impl_date = dates[1] if len(dates) > 1 else (dates[0] if dates else "")
     ver_match = re.search(r'(第[一二三四五]次修订|\d{4}年修订)', full_text[:2000])
     version = ver_match.group(1) if ver_match else "正式版"
 
-    # 技术关键词匹配
+    # 识别技术关键词
     keyword_regex = r'±?\d+(?:\.\d+)?(?:%|°|mm|kg|MPa|mg/L|kPa|min|℃|kV|A)'
     
-    # 按“条”切分
+    # 切分逻辑
     articles = re.split(r'\n(第[一二三四五六七八九十百]+条)', full_text)
     data = []
 
     if len(articles) <= 1:
-        # 全文模式：不强制添加“段落”编号
+        # 【核心修改】：不再进行任何 strip() 以外的清洗，保留所有换行
         keywords = re.findall(keyword_regex, full_text)
         data.append({
             "文件名": filename,
             "章": "正文",
             "编号": "",
-            "全文": full_text,
+            "全文": full_text, # 完整保留换行符的内容
             "发布日期": pub_date,
             "实施日期": impl_date,
             "版本": version,
@@ -57,6 +60,7 @@ def process_document_to_dataframe(file_path):
             article_no = articles[i] 
             article_content = articles[i+1].strip()
             new_chapter = re.search(r'(第[一二三四五六七八九十百]+章\s*[^\n]*)', article_content)
+            
             keywords = re.findall(keyword_regex, article_content)
             data.append({
                 "文件名": filename,
