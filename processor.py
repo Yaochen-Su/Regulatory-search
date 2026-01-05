@@ -36,8 +36,10 @@ def process_document_to_dataframe(file_path, ocr_enabled=False):
     except: return pd.DataFrame()
 
     if not full_text.strip(): return pd.DataFrame()
+    # 提取标题逻辑
     title_search = re.search(r'([^\n]{2,50}(?:条例|办法|标准|规定|文件))', full_text[:2000])
     std_no = title_search.group(1).strip() if title_search else os.path.splitext(filename)[0]
+    # 条文切分逻辑
     articles = re.split(r'\n(第[一二三四五六七八九十百]+条)', full_text)
     data = []
     current_chapter = "总则"
@@ -48,6 +50,6 @@ def process_document_to_dataframe(file_path, ocr_enabled=False):
         article_no = articles[i] 
         article_content = articles[i+1].strip()
         new_chapter = re.search(r'(第[一二三四五六七八九十百]+章\s*[^\n]*)', article_content)
-        data.append({"标准号": std_no, "章": current_chapter, "编号": article_no, "内容": article_content.split('\n')[0][:120], "全文": article_content})
+        data.append({"标准号": std_no, "章": current_chapter, "编号": article_no, "全文": article_content})
         if new_chapter: current_chapter = new_chapter.group(1).strip()
     return pd.DataFrame(data)
